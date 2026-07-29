@@ -1,0 +1,28 @@
+[project]
+name = "policyintel-backend"
+version = "1.0.0"
+description = "PolicyIntel AI — Explainable Government Policy Intelligence System"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests (no external services required)",
+    "integration: Integration tests (require running services)",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+select = ["E", "W", "F", "I", "UP", "B", "C4", "PT", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
