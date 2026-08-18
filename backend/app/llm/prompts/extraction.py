@@ -84,8 +84,11 @@ def build_policy_metadata_extraction_prompt(document_text: str) -> str:
     """
     Extract top-level metadata from a full policy document.
 
-    Used at the beginning of the ingestion pipeline to identify what
-    policy document has been received before chunking.
+    Uses the Government Policy Domain Model which distinguishes between:
+    - The *issuing* ministry (singular) — always one authority
+    - *Implementing* organisations (plural) — who delivers the scheme
+    - *Supporting* agencies (plural) — banks, technology providers, etc.
+    - *Departments* (plural) — named sub-ministerial bodies
 
     Parameters
     ----------
@@ -105,8 +108,39 @@ DOCUMENT TEXT (first section):
 
 Extract the following information:""",
         schema_hint={
-            "document_title": "string — official name of the policy/scheme",
-            "ministry": "string — issuing ministry or department, or null",
+            "document_title": "string — official name of the policy/scheme, or null",
+            "issuing_ministry": (
+                "string — the SINGLE ministry or department that ISSUED/OWNS this policy. "
+                "Example: 'Ministry of Agriculture and Farmers Welfare'. "
+                "MUST be a single string, never an array. Use null if not found."
+            ),
+            "implementing_organizations": (
+                "array of strings — bodies that DELIVER the scheme operationally. "
+                "e.g. ['State Agriculture Departments', 'District Collectors', "
+                "'Block Development Officers', 'Gram Panchayats']. "
+                "Empty array [] if none found."
+            ),
+            "supporting_agencies": (
+                "array of strings — banks, technology providers, insurance companies "
+                "and other SUPPORT bodies. "
+                "e.g. ['NABARD', 'SBI', 'NPCI', 'India Post Payments Bank']. "
+                "Empty array [] if none found."
+            ),
+            "departments": (
+                "array of strings — named sub-ministerial or cross-ministry departments. "
+                "e.g. ['Department of Agriculture, Cooperation & Farmers Welfare', "
+                "'Department of Financial Services']. "
+                "Empty array [] if none found."
+            ),
+            "stakeholders": (
+                "array of strings — any other named stakeholders such as nodal officers, "
+                "local bodies, missions, or committees not captured above. "
+                "Empty array [] if none found."
+            ),
+            "funding_pattern": (
+                "string — cost-sharing ratio e.g. '60:40 Centre:State', '100% Central'. "
+                "Use null if not mentioned."
+            ),
             "scheme_code": "string — official scheme code/number, or null",
             "effective_date": "string — effective date in YYYY-MM-DD format, or null",
             "issue_date": "string — date of issue in YYYY-MM-DD format, or null",

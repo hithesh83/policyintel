@@ -26,6 +26,18 @@ os.environ.setdefault("OLLAMA_MAX_RETRIES", "2")
 os.environ.setdefault("OLLAMA_RETRY_MIN_WAIT", "0.01")
 os.environ.setdefault("OLLAMA_RETRY_MAX_WAIT", "0.1")
 
+# Database env vars (used in unit tests — no real connections made)
+os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://policy_user:policy_password@localhost:5432/policyintel_db",
+)
+os.environ.setdefault("NEO4J_URI", "bolt://localhost:7687")
+os.environ.setdefault("NEO4J_USER", "neo4j")
+os.environ.setdefault("NEO4J_PASSWORD", "policy_password")
+os.environ.setdefault("QDRANT_HOST", "localhost")
+os.environ.setdefault("QDRANT_PORT", "6333")
+os.environ.setdefault("QDRANT_COLLECTION_NAME", "policy_chunks")
+
 
 # ---------------------------------------------------------------------------
 # Asyncio mode configuration (pytest-asyncio)

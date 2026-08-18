@@ -1,83 +1,163 @@
-import asyncio
-import logging
-from qdrant_client.http import models as qdrant_models
-from app.db.session import qdrant_client, neo4j_driver
+"""
+Database Initialisation
+=======================
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+Orchestrates startup initialisation for all three databases:
+
+1. **PostgreSQL** — creates all ORM tables (``create_all``).
+2. **Neo4j** — creates constraints and full-text indexes.
+3. **Qdrant** — creates the vector collection and payload indexes.
+
+All operations are idempotent — safe to call on every application startup.
+
+Usage (called from FastAPI lifespan)::
+
+    from app.db.init_db import init_all, close_all
+
+    async def lifespan(app):
+        await init_all()
+        yield
+        await close_all()
+"""
+
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy import text
+
+from app.core.db.neo4j import neo4j_manager
+from app.core.db.postgres import postgres_manager
+from app.core.db.qdrant import qdrant_manager
+
 logger = logging.getLogger(__name__)
 
-# Constants
-COLLECTION_NAME = "policy_chunks"
-VECTOR_SIZE = 768  # Specifically sized for Google Gemini text-embedding-004
 
+async def init_postgres() -> None:
+    """
+    Connect to PostgreSQL and create all ORM tables.
 
-async def init_qdrant() -> None:
+    Uses SQLAlchemy ``create_all`` — safe when tables already exist.
+    For production, Alembic should manage migrations instead.
     """
-    Ensure the Qdrant collection exists and is configured properly.
-    Uses a thread-safe synchronous call wrapped for logical grouping.
-    """
-    logger.info("Checking Qdrant collections...")
-    try:
-        collections_response = qdrant_client.get_collections()
-        exists = any(c.name == COLLECTION_NAME for c in collections_response.collections)
-        
-        if not exists:
-            logger.info(f"Creating Qdrant collection: '{COLLECTION_NAME}' (Size: {VECTOR_SIZE})")
-            qdrant_client.create_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=qdrant_models.VectorParams(
-                    size=VECTOR_SIZE,
-                    distance=qdrant_models.Distance.COSINE
-                )
-            )
-            logger.info("Qdrant collection created successfully.")
-        else:
-            logger.info(f"Qdrant collection '{COLLECTION_NAME}' already exists. Skipping creation.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Qdrant: {e}")
-        raise
+    logger.info("init_postgres() START")
+    postgres_manager.connect()
+
+    # Import all models so their metadata is registered before create_all
+    from app.models.document import Base  # noqa: F401 (registers Document, DocumentUpload)
+    from app.models.feedback import Feedback  # noqa: F401
+    from app.models.query_log import QueryLog  # noqa: F401
+
+    async with postgres_manager.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    logger.info("init_postgres() DONE — all tables created/verified")
 
 
 async def init_neo4j() -> None:
     """
-    Create necessary constraints and indexes in the Neo4j knowledge graph.
-    Requires APOC for some advanced schema rules, but standard constraints are native.
+    Connect to Neo4j and create schema constraints and indexes.
     """
-    logger.info("Checking Neo4j schema constraints...")
-    
-    # Define exact Cypher queries for creating idempotently
-    constraint_queries = [
-        "CREATE CONSTRAINT scheme_id_unique IF NOT EXISTS FOR (s:Scheme) REQUIRE s.id IS UNIQUE",
-        "CREATE CONSTRAINT clause_id_unique IF NOT EXISTS FOR (c:Clause) REQUIRE c.id IS UNIQUE",
-    ]
-    
+    logger.info("init_neo4j() START")
+    neo4j_manager.connect()
+    await neo4j_manager.init_schema()
+    logger.info("init_neo4j() DONE")
+
+
+async def init_qdrant() -> None:
+    """
+    Connect to Qdrant and ensure the policy_chunks collection exists.
+    """
+    logger.info("init_qdrant() START")
+    qdrant_manager.connect()
+    await qdrant_manager.ensure_collection()
+    logger.info("init_qdrant() DONE")
+
+
+async def init_all() -> None:
+    """
+    Run all database initialisations concurrently.
+
+    Called once from the FastAPI lifespan at application startup.
+    Failures are logged but do NOT crash the application — partial
+    database availability is better than complete startup failure.
+    """
+    import asyncio
+
+    logger.info("=" * 60)
+    logger.info("PolicyIntel AI — Database Initialisation")
+    logger.info("=" * 60)
+
+    results = await asyncio.gather(
+        _safe_init("PostgreSQL", init_postgres),
+        _safe_init("Neo4j", init_neo4j),
+        _safe_init("Qdrant", init_qdrant),
+        return_exceptions=True,
+    )
+
+    for name, result in zip(["PostgreSQL", "Neo4j", "Qdrant"], results):
+        if isinstance(result, Exception):
+            logger.error("init_all: %s initialisation FAILED: %s", name, result)
+        else:
+            logger.info("init_all: %s ✓", name)
+
+    logger.info("=" * 60)
+
+
+async def close_all() -> None:
+    """
+    Gracefully close all database connections.
+
+    Called from the FastAPI lifespan on application shutdown.
+    """
+    import asyncio
+
+    logger.info("Closing all database connections...")
+    await asyncio.gather(
+        postgres_manager.close(),
+        neo4j_manager.close(),
+        qdrant_manager.close(),
+        return_exceptions=True,
+    )
+    logger.info("All database connections closed.")
+
+
+# ---------------------------------------------------------------------------
+# Health checks (used by /health endpoint)
+# ---------------------------------------------------------------------------
+
+
+async def health_check_all() -> dict[str, bool]:
+    """
+    Run health checks on all three databases concurrently.
+
+    Returns a mapping of database name → is_healthy.
+    """
+    import asyncio
+
+    pg_ok, neo4j_ok, qdrant_ok = await asyncio.gather(
+        postgres_manager.health_check(),
+        neo4j_manager.health_check(),
+        qdrant_manager.health_check(),
+        return_exceptions=True,
+    )
+
+    return {
+        "postgres": pg_ok is True,
+        "neo4j": neo4j_ok is True,
+        "qdrant": qdrant_ok is True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _safe_init(name: str, fn) -> None:
+    """Run an init function, catching and logging exceptions."""
     try:
-        async with neo4j_driver.session() as session:
-            for query in constraint_queries:
-                await session.run(query)
-                logger.info(f"Executed Neo4j query: {query}")
-        logger.info("Neo4j schema constraints ensured successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Neo4j: {e}")
+        await fn()
+    except Exception as exc:
+        logger.error("%s init failed: %s", name, exc)
         raise
-
-
-async def main() -> None:
-    """Run all initialization steps asynchronously."""
-    logger.info("Starting database initialization sequence...")
-    try:
-        # We can run these sequentially to ensure easy log tracing
-        await init_qdrant()
-        await init_neo4j()
-        logger.info("Database initialization completed successfully.")
-    finally:
-        # Gracefully close the Neo4j driver
-        await neo4j_driver.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

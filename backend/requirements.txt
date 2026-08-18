@@ -1,11 +1,14 @@
 # ==============================================================================
 # PolicyIntel AI — Python Backend Dependencies
 # Week 1: AI Foundation (LLM Layer)
+# Week 2: AI Intelligence Pipeline
+# Week 2.5: Persistence Layer & Ingestion API
 # ==============================================================================
 
 # --- Web Framework ---
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
+python-multipart==0.0.12
 
 # --- Async HTTP Client (for Ollama REST API communication) ---
 httpx==0.28.1
@@ -20,10 +23,20 @@ tenacity==9.0.0
 # --- Environment Variables ---
 python-dotenv==1.0.1
 
-# --- Database (stubs for future weeks — do not remove) ---
+# --- Database: PostgreSQL ---
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 alembic==1.14.0
+
+# --- Database: Neo4j ---
+neo4j==6.2.0
+
+# --- Database: Qdrant (Vector DB) ---
+qdrant-client==1.18.0
+
+# --- PDF Parsing (Week 2.5) ---
+pymupdf==1.24.11
+pdfplumber==0.11.4
 
 # --- Testing ---
 pytest==8.3.4
